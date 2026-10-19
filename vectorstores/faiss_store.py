@@ -62,6 +62,7 @@ class FAISSStore:
             return
         if self.index_path.exists():
             shutil.rmtree(self.index_path)
+        self.index_path.mkdir(parents=True, exist_ok=True)  # 自动创建目录
         self._store.save_local(str(self.index_path))
 
     def clear(self):
