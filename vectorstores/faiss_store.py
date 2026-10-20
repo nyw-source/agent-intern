@@ -71,6 +71,13 @@ class FAISSStore:
             shutil.rmtree(self.index_path)
         self._store = None
 
+    def as_retriever(self, top_k: int = 3):
+        """返回 LangChain 标准检索器接口（Retriever）"""
+        if self._store is None:
+            raise RuntimeError("向量库为空，请先添加文档")
+        return self._store.as_retriever(search_kwargs={"k": top_k})
+
+
 
 # 全局单例
 faiss_store = FAISSStore()
