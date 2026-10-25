@@ -14,6 +14,7 @@ from langgraph.graph.message import add_messages
 
 from config.settings import settings
 from tools.langchain_tools import lc_tools
+from utils.memory_utils import trim_history
 
 # ① 绑定了工具的 LLM
 llm = ChatOpenAI(
@@ -39,11 +40,18 @@ class AgentState(TypedDict):
 
 
 # ③ 节点 1：调用 LLM（让它决策是否调工具）
+from utils.memory_utils import trim_history
+
 def llm_call(state: AgentState):
-    response = llm_with_tools.invoke(
-        [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+    # 裁剪历史，控制上下文长度，再发给模型
+    messages = trim_history(
+        state["messages"],
+        max_tokens=2000,
+        system_prompt=SYSTEM_PROMPT,
     )
+    response = llm_with_tools.invoke(messages)
     return {"messages": [response]}
+
 
 
 # ④ 节点 2：执行工具（可能一次并行多个）
@@ -66,19 +74,24 @@ def should_continue(state: AgentState) -> str:
     return END           # 模型给出最终回答 → 结束
 
 
-# ⑥ 构建图
-builder = StateGraph(AgentState)
-builder.add_node("llm_call", llm_call)
-builder.add_node("tools", tool_node)
+def build_agent_graph(checkpointer=None):
+    """
+    构建 Agent 图（工厂函数）
+    :param checkpointer: 传入检查点则带记忆；不传则无状态
+    类比 Java：同一个图纸（节点+边），可以注入不同的会话存储实现
+    """
+    builder = StateGraph(AgentState)
+    builder.add_node("llm_call", llm_call)
+    builder.add_node("tools", tool_node)
+    builder.add_edge(START, "llm_call")
+    builder.add_conditional_edges(
+        "llm_call",
+        should_continue,
+        {"tools": "tools", END: END},
+    )
+    builder.add_edge("tools", "llm_call")
+    return builder.compile(checkpointer=checkpointer)
 
-builder.add_edge(START, "llm_call")                 # 入口先到 llm_call
-# 条件边：从 llm_call 出发，由 should_continue 的返回值决定走向
-builder.add_conditional_edges(
-    "llm_call",
-    should_continue,
-    {"tools": "tools", END: END},
-)
-builder.add_edge("tools", "llm_call")              # 工具执行完回到 llm_call，形成循环
 
-# 编译成可执行的图
-graph_agent = builder.compile()
+# 第 5 章：无记忆的基础图（保持不变，test_graph 仍能跑）
+graph_agent = build_agent_graph()
